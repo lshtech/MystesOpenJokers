@@ -1,0 +1,20 @@
+[manifest]
+version = "1.0.0"
+dump_lua = true
+priority = 0
+        
+# Wild Cards cannot be debuffed
+[[patches]]
+[patches.pattern]
+target = "blind.lua"
+pattern = '''if self.debuff and not self.disabled and card.area ~= G.jokers then'''
+position = "before"
+payload = '''
+if card.area ~= G.jokers and card.ability.name == 'Wild Card' then
+    card:set_debuff(false)
+    return
+end
+'''
+match_indent = true
+overwrite = false
+
