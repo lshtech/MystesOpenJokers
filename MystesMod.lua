@@ -6,6 +6,53 @@
 --- BADGE_COLOUR: 66AB05
 --- DISPLAY_NAME: Mystes' Mod
 
+function SMODS.poll_enhancement(args)
+    args = args or {}
+    local key = args.key or 'stdenhance'
+    local mod = args.mod or 1
+    local guaranteed = args.guaranteed or false
+    local options = args.options or get_current_pool("Enhanced")
+    local type_key = args.type_key or key.."type"..G.GAME.round_resets.ante
+    key = key..G.GAME.round_resets.ante
+
+    local available_enhancements = {}
+    local total_weight = 0
+    for _, v in ipairs(options) do
+        if v ~= "UNAVAILABLE" then
+            local enhanced_option = {}
+            if type(v) == 'string' then
+                assert(G.P_CENTERS[v])
+                enhanced_option = { name = v, weight = G.P_CENTERS[v].weight or 5 } -- default weight set to 5 to replicate base game weighting
+            elseif type(v) == 'table' then
+                assert(G.P_CENTERS[v.name])
+                enhanced_option = { name = v.name, weight = v.weight }
+            end
+            if enhanced_option.weight > 0 then
+                table.insert(available_enhancements, enhanced_option)
+                total_weight = total_weight + enhanced_option.weight
+            end
+        end
+	end
+    total_weight = total_weight + (total_weight / 2 * 98) -- set base rate to 2%
+
+    local type_weight = 0 -- modified weight total
+    for _,v in ipairs(available_enhancements) do
+        v.weight = G.P_CENTERS[v.name].get_weight and G.P_CENTERS[v.name]:get_weight() or v.weight
+        type_weight = type_weight + v.weight
+    end
+
+    local enhanced_poll = pseudorandom(pseudoseed(key or 'stdenhance'..G.GAME.round_resets.ante))
+    if enhanced_poll > 1 - (type_weight*mod / total_weight) or guaranteed then -- is an enhancement generated
+        local enhanced_type_poll = pseudorandom(pseudoseed(type_key)) -- which enhancement is generated
+        local weight_i = 0
+        for _, v in ipairs(available_enhancements) do
+            weight_i = weight_i + v.weight
+            if enhanced_type_poll > 1 - (weight_i / type_weight) then
+                return v.name
+            end
+        end
+    end
+end
 
 local config = {
     j_cabinet = true,
@@ -341,7 +388,8 @@ function SMODS.INIT.MystesMod()
                     theCards = G.hand.highlighted
                 end
                 local theCard = pseudorandom_element(theCards, pseudoseed("charred"))
-                theCard:set_ability(pseudorandom_element(enhancements, pseudoseed("charred")), nil, true)
+                local enhancement = SMODS.poll_enhancement({key = "charred", guaranteed = true})
+                theCard:set_ability(G.P_CENTERS[enhancement])
                 card_eval_status_text(card, "extra", nil, nil, nil, {
                     message = localize("k_upgrade_ex"),
                     delay = 0.45,
@@ -395,7 +443,8 @@ function SMODS.INIT.MystesMod()
                         theCards = G.hand.highlighted
                     end
                     local theCard = pseudorandom_element(theCards, pseudoseed("love_triangle"))
-                    theCard:set_seal(pseudorandom_element(seals, pseudoseed("love_triangle")))
+                    local seal = SMODS.poll_seal({key = "love_triangle", guaranteed = true})
+                    theCard:set_seal(seal)
                     card_eval_status_text(card, "extra", nil, nil, nil, {
                         message = localize("k_upgrade_ex"),
                         delay = 0.45,
@@ -513,8 +562,8 @@ function SMODS.INIT.MystesMod()
 			loc = {
 				name = "Santa Joker",
 				text = {
-                    "{C:green}#1# in #2#{} chance of adding {C:dark_edition}Foil{},",
-                    "{C:dark_edition}Holographic{} or {C:dark_edition}Polychrome{} effect to",
+                    "{C:green}#1# in #2#{} chance of adding a",
+                    "random edition effect to",
                     "one random normal card on {C:attention}first draw{}",
 				}
 			},
@@ -862,7 +911,7 @@ function SMODS.INIT.MystesMod()
                 return {card.ability.extra}
             end
             SMODS.Jokers.j_conquistador.calculate = function(card, context)
-                if context.debuffed_hand and G.GAME.blind.triggered then 
+                if context.joker_main and G.GAME.blind.triggered then
                     ease_dollars(card.ability.extra)
                     G.GAME.dollar_buffer = (G.GAME.dollar_buffer or 0) + card.ability.extra
                     G.E_MANAGER:add_event(Event({func = (function() G.GAME.dollar_buffer = 0; return true end)}))
@@ -877,7 +926,275 @@ function SMODS.INIT.MystesMod()
             end
         end
         FusionJokers.fusions:add_fusion("j_matador", nil, false, "j_luchador", nil, false, "j_conquistador", 6)
+    elseif SMODS.findModByID("DeFused") then
+        if config.j_court_magician then
+            local court_magician = {
+                loc = {
+                    name = "Court Magician",
+                    text = {
+                        "Playing a {C:attention}#1#{} cuts the current",
+                        "Blind by {C:attention}#2#%{} and earns {C:money}$#3#{} and",
+                        "creates a {C:spectral}Spectral{} and a {C:tarot}Tarot{} card",
+                    }
+                },
+                ability_name = "Court Magician",
+                slug = "court_magician",
+                ability = {
+                    extra = {
+                        hand = "Royal Flush",
+                        cut = 0.3,
+                        dollars = 10,
+                    }
+                },
+                rarity = 3,
+                cost = 20,
+                unlocked = true,
+                discovered = true,
+                blueprint_compat = true,
+                eternal_compat = true,
+                soul_pos = {x = 1, y = 0}
+            }
+            init_joker(court_magician)
+            function SMODS.Jokers.j_court_magician.loc_def(card)
+                return {card.ability.extra.hand, 100*(1 - card.ability.extra.cut), card.ability.extra.dollars}
+            end
+            SMODS.Jokers.j_court_magician.calculate = function(card, context)
+                if context.joker_main and G.GAME.current_round.current_hand.handname == card.ability.extra.hand then
+    
+                    if #G.consumeables.cards + G.GAME.consumeable_buffer < G.consumeables.config.card_limit then
+                        G.GAME.consumeable_buffer = G.GAME.consumeable_buffer + 1
+                        G.E_MANAGER:add_event(Event({
+                            trigger = 'before',
+                            delay = 0.0,
+                            func = (function()
+                                    local card = create_card('Spectral',G.consumeables, nil, nil, nil, nil, nil, 'cmg')
+                                    card:add_to_deck()
+                                    G.consumeables:emplace(card)
+                                    G.GAME.consumeable_buffer = G.GAME.consumeable_buffer - 1
+                                return true end)}))
+                        -- return {
+                        --     message = localize('k_plus_spectral'),
+                        --     colour = G.C.SECONDARY_SET.Spectral,
+                        --     card = card
+                        -- }
+                    end
+    
+                    if #G.consumeables.cards + G.GAME.consumeable_buffer < G.consumeables.config.card_limit then
+                        G.GAME.consumeable_buffer = G.GAME.consumeable_buffer + 1
+                        G.E_MANAGER:add_event(Event({
+                            func = (function()
+                                G.E_MANAGER:add_event(Event({
+                                    func = function() 
+                                        local card = create_card('Tarot',G.consumeables, nil, nil, nil, nil, nil, 'cmg')
+                                        card:add_to_deck()
+                                        G.consumeables:emplace(card)
+                                        G.GAME.consumeable_buffer = G.GAME.consumeable_buffer - 1
+                                        return true end}))   
+                                    card_eval_status_text(context.blueprint_card or card, 'extra', nil, nil, nil, {message = localize('k_plus_tarot'), colour = G.C.PURPLE})                       
+                                return true end)}))
+                    end
+    
+                    G.E_MANAGER:add_event(Event({
+                        func = function()
+                            ease_dollars(card.ability.extra.dollars)
+                            card_eval_status_text(context.blueprint_card or card, 'extra', nil, nil, nil, {message = localize('$')..card.ability.extra.dollars,colour = G.C.MONEY, delay = 0.45})
+                            return true end}))
+    
+                    G.E_MANAGER:add_event(Event({trigger = 'after',delay = 0.1,func = function()
+                        G.GAME.blind.chips = math.floor(G.GAME.blind.chips * card.ability.extra.cut)
+                        G.GAME.blind.chip_text = number_format(G.GAME.blind.chips)
+                        
+                        local chips_UI = G.hand_text_area.blind_chips
+                        G.FUNCS.blind_chip_UI_scale(G.hand_text_area.blind_chips)
+                        G.HUD_blind:recalculate() 
+                        chips_UI:juice_up()
+                
+                        if not silent then play_sound('chips2') end
+                        return true end}))
+                end
+            end
+        end
+       
+        if config.j_mathwiz then
+            local test = {
+                loc = {
+                    name = "Math Wiz",
+                    text = {
+                        "Each played {C:attention}Ace{}, {C:attention}2{}, {C:attention}3{}, {C:attention}5{}, or {C:attention}8{}",
+                        "gives Fibonacci Chips and Mult",
+                        "when scored (starting at",
+                        "{C:chips}+13{} Chips and {C:mult}+5{} Mult)",
+                    }
+                },
+                ability_name = "MathWiz",
+                slug = "mathwiz",
+                ability = {
+                    extra = {
+                        base_chips_fibo = 3,
+                        base_mult_fibo = 1,
+                        current_chips_fibo = 3,
+                        current_mult_fibo = 1,
+                    }
+                },
+                rarity = 3,
+                cost = 13,
+                unlocked = true,
+                discovered = true,
+                blueprint_compat = true,
+                eternal_compat = true,
+                soul_pos = {x = 1, y = 0}
+            }
+            init_joker(test)
+            -- function SMODS.Jokers.j_mathwiz.loc_def(card)
+            --     return {getfibo(card.ability.base_chips_fibo), getfibo(card.ability.base_mult_fibo)}
+            -- end
+            SMODS.Jokers.j_mathwiz.calculate = function(card, context)
+                if context.individual and context.cardarea == G.play and is_fibo(context.other_card) then
+                    local theChips = getfibo(card.ability.extra.current_chips_fibo)
+                    local theMult = getfibo(card.ability.extra.current_mult_fibo)
+                    if not context.blueprint then
+                        card.ability.extra.current_chips_fibo = card.ability.extra.current_chips_fibo + 1
+                        card.ability.extra.current_mult_fibo = card.ability.extra.current_mult_fibo + 1
+                    end
+                    return {
+                        chips = theChips,
+                        mult = theMult,
+                        card = card
+                    }
+                elseif context.after and context.cardarea == G.jokers then
+                    card.ability.extra.current_chips_fibo = card.ability.extra.base_chips_fibo
+                    card.ability.extra.current_mult_fibo = card.ability.extra.base_mult_fibo
+                end
+            end
+        end
 
+        if config.j_apophenia then
+            local apophenia = {
+                loc = {
+                    name = "Apophenia",
+                    text = {
+                        "{C:attention}+#1#{} consumable slot",
+                        "Create a {C:tarot}Tarot{} card when",
+                        "{C:attention}Blind{} is selected or when",
+                        "any {C:attention}Booster Pack{} is opened",
+                    }
+                },
+                ability_name = "Apophenia",
+                slug = "apophenia",
+                ability = {
+                    extra = {
+                        slots = 1,
+                    }
+                },
+                rarity = 3,
+                cost = 12,
+                unlocked = true,
+                discovered = true,
+                blueprint_compat = true,
+                eternal_compat = true,
+                soul_pos = {x = 1, y = 0}
+            }
+            init_joker(apophenia)
+            function SMODS.Jokers.j_apophenia.loc_def(card)
+                return {card.ability.extra.slots}
+            end
+            SMODS.Jokers.j_apophenia.calculate = function(card, context)
+                if context.setting_blind and not card.getting_sliced and not (context.blueprint_card or card).getting_sliced then
+                    create_tarot(card, 'apo')
+                elseif context.open_booster then
+                    create_tarot(card, 'apo')
+                end
+            end
+        end
+
+        if config.j_four_finger_discount then
+            local four_finger_discount = {
+                loc = {
+                    name = "Four-Finger Discount",
+                    text = {
+                        "All {C:attention}Flushes{} and {C:attention}Straights{}",
+                        "can be made with {C:attention}4{} cards.",
+                        "Allows {C:attention}Straights{} to be",
+                        "made with gaps of {C:attention}1 rank.",
+                        "Earn {C:money}$#1#{} when scoring",
+                        "a {C:attention}#2#{}.",
+                    }
+                },
+                ability_name = "Four Finger Discount",
+                slug = "four_finger_discount",
+                ability = {
+                    extra = {
+                        dollars = 5,
+                        type = "Straight Flush",
+                    }
+                },
+                rarity = 3,
+                cost = 12,
+                unlocked = true,
+                discovered = true,
+                blueprint_compat = true,
+                eternal_compat = true,
+                soul_pos = {x = 1, y = 0}
+            }
+            init_joker(four_finger_discount)
+            function SMODS.Jokers.j_four_finger_discount.loc_def(card)
+                return {card.ability.extra.dollars, card.ability.extra.type}
+            end
+            SMODS.Jokers.j_four_finger_discount.calculate = function(card, context)
+                if context.before and next(context.poker_hands[card.ability.extra.type]) then
+                    G.E_MANAGER:add_event(Event({
+                        func = function()
+                            ease_dollars(card.ability.extra.dollars)
+                            card_eval_status_text(context.blueprint_card or card, 'extra', nil, nil, nil, {message = localize('$')..card.ability.extra.dollars,colour = G.C.MONEY, delay = 0.45})
+                            return true
+                        end}))
+                    return
+                end
+            end
+        end
+       
+        if config.j_conquistador then
+            local conquistador = {
+                loc = {
+                    name = "Conquistador",
+                    text = {
+                        "Earn {C:money}$#1#{} on hand", 
+                        "triggering {C:attention}Boss Blind{}",
+                        "ability and then disables blind",
+                    }
+                },
+                ability_name = "Conquistador",
+                slug = "conquistador",
+                ability = {
+                    extra = 20,
+                },
+                rarity = 3,
+                cost = 13,
+                unlocked = true,
+                discovered = true,
+                blueprint_compat = true,
+                eternal_compat = true,
+                soul_pos = {x = 1, y = 0}
+            }
+            init_joker(conquistador)
+            function SMODS.Jokers.j_conquistador.loc_def(card)
+                return {card.ability.extra}
+            end
+            SMODS.Jokers.j_conquistador.calculate = function(card, context)
+                if context.joker_main and G.GAME.blind.triggered then
+                    ease_dollars(card.ability.extra)
+                    G.GAME.dollar_buffer = (G.GAME.dollar_buffer or 0) + card.ability.extra
+                    G.E_MANAGER:add_event(Event({func = (function() G.GAME.dollar_buffer = 0; return true end)}))
+                    card_eval_status_text(context.blueprint_card or card, 'extra', nil, nil, nil, {message = localize('ph_boss_disabled')})
+                    G.GAME.blind:disable()
+                    return {
+                        message = localize('$')..card.ability.extra,
+                        dollars = card.ability.extra,
+                        colour = G.C.MONEY
+                    }
+                end
+            end
+        end
     end
 end
 
